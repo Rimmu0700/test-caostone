@@ -1,0 +1,1072 @@
+openapi: 3.0.3
+info:
+  title: API Sistem Identifikasi dan Edukasi Tanaman Obat Usada Bali
+  version: 1.1.0
+  description: |
+    Kontrak REST API antara aplikasi mobile Flutter (client-only), dasbor admin/kurator BRIN,
+    dan backend (YOLO11 -> validasi green-pixel -> MobileNetV3-Small -> Grad-CAM).
+
+    Sumber tunggal: SRS Kelompok 10 Capstone v1.1. Setiap operasi memuat `x-srs-ref`
+    (rujukan FR/NFR/Bab SRS) untuk traceability. Bagian yang di SRS masih TBD ditandai `x-tbd`.
+
+    Ketentuan dari SRS:
+    - REST API di atas HTTPS/TLS, format JSON; unggah foto memakai multipart/form-data (Bab 7 poin 5, NFR-3).
+    - Ambang confidence deteksi YOLO11 = 0,15 (FR-8); ambang green-pixel = 15% (FR-12);
+      ambang "Tidak Meyakinkan" = confidence < 25% (FR-14, FR-24).
+    - Nilai `confidence` dan `green_pixel_ratio` memakai skala 0.0 - 1.0.
+    - Waktu respons identifikasi <= 5 detik P95 (NFR-1); minimal 20 request klasifikasi konkuren (NFR-8).
+    - Notifikasi "Tidak Meyakinkan" dikirim backend melalui Firebase Cloud Messaging ke token
+      yang didaftarkan lewat PUT /notifications/device-token (Bab 7 poin 1). Format payload ada pada skema
+      `FcmUncertainNotification`; pengiriman dilakukan server, bukan lewat endpoint publik.
+    - Peran: `user` (pengguna umum) dan `curator` (staf BRIN). Seluruh /admin/* hanya untuk `curator` (FR-3, FR-21, NFR-7).
+  contact:
+    name: Kelompok 10 Capstone - Universitas Pendidikan Nasional
+  x-tbd:
+    - Skema/ERD basis data spesies, etnobotani, dan riwayat (SRS Daftar TBD)
+    - Kebijakan role/hak akses bila staf kurator lebih dari satu orang (SRS 2.2, Daftar TBD)
+    - Detail mekanisme fallback saat YOLO11/MobileNetV3 gagal (NFR-10, Daftar TBD)
+    - Kebijakan retensi dan penghapusan foto pengguna (NFR-5, Daftar TBD)
+    - Mekanisme pembuatan akun staf kurator
+    - Pagination (SRS tidak mengatur; tambahkan bila jumlah data membutuhkan)
+servers:
+  - url: https://api.example-usada.id/v1
+    description: Live Cloud VPS dengan SSL aktif - ganti dengan domain resmi (Bab 1.3, Bab 7 poin 3)
+  - url: http://localhost:8000/v1
+    description: Pengembangan lokal
+
+tags:
+  - name: Auth
+    description: Autentikasi JWT - registrasi, login, verifikasi email, reset kata sandi
+  - name: Profile
+    description: Profil dan ringkasan aktivitas pengguna
+  - name: Identification
+    description: Unggah foto, hasil klasifikasi, skor keyakinan, dan Grad-CAM
+  - name: Species
+    description: Data etnobotani spesies
+  - name: History
+    description: Riwayat dokumentasi pengguna
+  - name: Notifications
+    description: Notifikasi FCM untuk hasil tidak yakin
+  - name: Admin - Species
+    description: Kelola spesies dan verifikasi konten (kurator)
+  - name: Admin - Moderation
+    description: Moderasi dokumentasi publik dan feedback/koreksi klasifikasi (kurator)
+  - name: Admin - Monitoring
+    description: Log audit dan statistik penggunaan (kurator)
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ------------------------------------------------------------------ AUTH
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Registrasi dengan email dan kata sandi
+      description: Membuat akun dan mengirim tautan verifikasi ke email melalui SMTP. Kata sandi disimpan dengan hashing + salt.
+      x-srs-ref: [FR-1, NFR-6, "Bab 6 Validasi", "Bab 7 poin 4"]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Akun dibuat, tautan verifikasi dikirim ke email
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/verify-email:
+    get:
+      tags: [Auth]
+      summary: Verifikasi email dari tautan
+      x-srs-ref: [FR-1, "Bab 7 poin 4"]
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Email terverifikasi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login dengan kredensial terdaftar
+      description: Mengembalikan token akses JWT beserta peran agar klien mengarahkan ke halaman utama sesuai peran.
+      x-srs-ref: [FR-2, FR-3, "Bab 6 Validasi"]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthToken'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Minta tautan reset kata sandi via email
+      x-srs-ref: [FR-2, "Bab 7 poin 4"]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '202':
+          description: Permintaan diterima; tautan dikirim bila email terdaftar
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Atur ulang kata sandi dengan token dari email
+      x-srs-ref: [FR-2, NFR-6]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token:
+                  type: string
+                new_password:
+                  type: string
+                  format: password
+      responses:
+        '200':
+          description: Kata sandi diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # --------------------------------------------------------------- PROFILE
+  /users/me:
+    get:
+      tags: [Profile]
+      summary: Ambil profil pengguna
+      x-srs-ref: [FR-4, FR-5]
+      responses:
+        '200':
+          description: Profil pengguna
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Profile]
+      summary: Ubah nama dan preferensi notifikasi
+      description: Respons sukses dipakai klien untuk menampilkan konfirmasi pembaruan berhasil.
+      x-srs-ref: [FR-4]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:
+                  type: string
+                notification_enabled:
+                  type: boolean
+      responses:
+        '200':
+          description: Profil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /users/me/summary:
+    get:
+      tags: [Profile]
+      summary: Ringkasan aktivitas identifikasi untuk halaman profil
+      x-srs-ref: [FR-5]
+      responses:
+        '200':
+          description: Ringkasan aktivitas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivitySummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # -------------------------------------------------------- NOTIFICATIONS
+  /notifications/device-token:
+    put:
+      tags: [Notifications]
+      summary: Daftarkan token FCM perangkat untuk notifikasi hasil tidak yakin
+      description: |
+        Setelah token terdaftar, backend mengirim notifikasi push via Firebase Cloud Messaging
+        setiap kali hasil identifikasi berstatus `uncertain` (confidence < 0,25), selama
+        `notification_enabled = true` pada profil (FR-4). Isi pesan mengikuti skema `FcmUncertainNotification`.
+      x-srs-ref: [FR-4, FR-14, FR-24, FR-25, "Bab 7 poin 1"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fcm_token]
+              properties:
+                fcm_token:
+                  type: string
+      responses:
+        '204':
+          description: Token tersimpan
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # -------------------------------------------------------- IDENTIFICATION
+  /identifications:
+    post:
+      tags: [Identification]
+      summary: Proses identifikasi foto daun
+      description: |
+        Pipeline: YOLO11 (conf >= 0,15) -> crop -> validasi green-pixel (>= 15%) -> MobileNetV3-Small -> Grad-CAM.
+
+        - Tidak ada daun terdeteksi: gambar penuh dipakai sebagai fallback dan `detection_status = fallback_full_image` (FR-10).
+        - Rasio hijau < 15%: ditolak 422 `IMAGE_REJECTED_LOW_GREEN`; klasifikasi tidak dijalankan (FR-12).
+        - Confidence < 0,25: `status = uncertain`, label "Tidak Meyakinkan"; backend mengirim notifikasi FCM (FR-14, FR-24).
+        - Tamu dapat mengidentifikasi tanpa login (Gambar 5.2); hasil hanya masuk riwayat bila pengguna login (FR-19).
+        - Foto hanya disimpan bila pengguna login dan `consent_store_photo = true` (NFR-5).
+        - Respons memuat hasil, skor keyakinan, info etnobotani, dan aset Grad-CAM (Bab 7 poin 5).
+      x-srs-ref: [FR-6, FR-7, FR-8, FR-9, FR-10, FR-11, FR-12, FR-13, FR-14, FR-15, FR-16, FR-24, FR-25, NFR-1, NFR-2, NFR-5, NFR-8, NFR-10, "Bab 6 Validasi"]
+      x-tbd: Detail mekanisme fallback saat model gagal (NFR-10)
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: Berkas JPG/JPEG atau PNG
+                consent_store_photo:
+                  type: boolean
+                  default: false
+                  description: Persetujuan eksplisit penyimpanan foto (NFR-5)
+                captured_at:
+                  type: string
+                  format: date-time
+                  description: Waktu pengambilan foto (FR-19)
+            encoding:
+              image:
+                contentType: image/jpeg, image/png
+      responses:
+        '200':
+          description: Identifikasi selesai
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentificationResult'
+        '415':
+          description: Format berkas tidak didukung
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: UNSUPPORTED_FORMAT
+                message: Format tidak didukung, gunakan JPG/PNG
+        '422':
+          description: Citra ditolak validasi green-pixel atau berkas kosong
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: IMAGE_REJECTED_LOW_GREEN
+                message: Gambar tidak memenuhi syarat, mohon foto ulang bagian daun
+                details:
+                  green_pixel_ratio: 0.08
+                  threshold: 0.15
+        '503':
+          description: Model deteksi/klasifikasi gagal; tidak ada identifikasi keliru yang dikembalikan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                code: MODEL_UNAVAILABLE
+                message: Layanan identifikasi sementara tidak tersedia, silakan coba lagi
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # -------------------------------------------------------------- SPECIES
+  /species:
+    get:
+      tags: [Species]
+      summary: Daftar spesies terverifikasi (17 spesies Taman Usada)
+      description: Hanya mengembalikan konten berstatus terverifikasi kurator.
+      x-srs-ref: [FR-17, FR-18]
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Daftar spesies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Species'
+
+  /species/{speciesId}:
+    get:
+      tags: [Species]
+      summary: Informasi etnobotani satu spesies
+      x-srs-ref: [FR-17, FR-18]
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - $ref: '#/components/parameters/SpeciesId'
+      responses:
+        '200':
+          description: Detail spesies
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Species'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # -------------------------------------------------------------- HISTORY
+  /history:
+    get:
+      tags: [History]
+      summary: Riwayat dokumentasi pengguna terdaftar dengan filter
+      x-srs-ref: [FR-19, FR-20]
+      parameters:
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: species_name
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Riwayat identifikasi
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HistoryItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # -------------------------------------------------------- ADMIN SPECIES
+  /admin/species:
+    get:
+      tags: [Admin - Species]
+      summary: Daftar semua spesies termasuk yang belum terverifikasi
+      x-srs-ref: [FR-21, FR-22, "Bab 8 Verifikasi Pascamigrasi"]
+      parameters:
+        - name: is_verified
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Daftar spesies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Species'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [Admin - Species]
+      summary: Tambah data spesies
+      description: Penambahan spesies di luar 17 spesies model memerlukan pelatihan ulang dan verifikasi kurator (Bab 2.3). Dicatat pada log audit.
+      x-srs-ref: [FR-22, FR-23]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpeciesInput'
+      responses:
+        '201':
+          description: Spesies dibuat (belum terverifikasi)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Species'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/species/{speciesId}:
+    put:
+      tags: [Admin - Species]
+      summary: Perbarui data spesies
+      x-srs-ref: [FR-22, FR-23]
+      parameters:
+        - $ref: '#/components/parameters/SpeciesId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpeciesInput'
+      responses:
+        '200':
+          description: Spesies diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Species'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    delete:
+      tags: [Admin - Species]
+      summary: Hapus data spesies
+      x-srs-ref: [FR-22, FR-23]
+      parameters:
+        - $ref: '#/components/parameters/SpeciesId'
+      responses:
+        '204':
+          description: Terhapus
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/species/{speciesId}/verification:
+    put:
+      tags: [Admin - Species]
+      summary: Set status terverifikasi konten etnobotani
+      description: Konten baru tampil ke pengguna umum setelah `is_verified = true`.
+      x-srs-ref: [FR-18, FR-23, "Bab 8 Verifikasi Pascamigrasi"]
+      parameters:
+        - $ref: '#/components/parameters/SpeciesId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [is_verified]
+              properties:
+                is_verified:
+                  type: boolean
+      responses:
+        '200':
+          description: Status verifikasi diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Species'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ---------------------------------------------------- ADMIN MODERATION
+  /admin/identifications:
+    get:
+      tags: [Admin - Moderation]
+      summary: Daftar hasil dokumentasi publik untuk verifikasi dan moderasi
+      x-srs-ref: [FR-21, FR-22, FR-26]
+      parameters:
+        - name: flagged
+          in: query
+          schema:
+            type: boolean
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/IdentificationStatus'
+      responses:
+        '200':
+          description: Daftar hasil identifikasi
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminIdentification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/identifications/{identificationId}/flag:
+    put:
+      tags: [Admin - Moderation]
+      summary: Tandai atau lepas tanda dokumentasi yang meragukan
+      x-srs-ref: [FR-22, FR-23]
+      parameters:
+        - $ref: '#/components/parameters/IdentificationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [flagged]
+              properties:
+                flagged:
+                  type: boolean
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Tanda diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminIdentification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/identifications/{identificationId}/feedback:
+    post:
+      tags: [Admin - Moderation]
+      summary: Koreksi klasifikasi oleh kurator (Expert Feedback Loop)
+      description: Menandai spesies yang benar; koreksi disimpan sebagai data pelatihan ulang model.
+      x-srs-ref: [FR-26, FR-27, FR-23]
+      parameters:
+        - $ref: '#/components/parameters/IdentificationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [correct_species_id]
+              properties:
+                correct_species_id:
+                  type: string
+                  format: uuid
+                note:
+                  type: string
+      responses:
+        '201':
+          description: Feedback tersimpan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Feedback'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # --------------------------------------------------- ADMIN MONITORING
+  /admin/audit-logs:
+    get:
+      tags: [Admin - Monitoring]
+      summary: Log audit perubahan pada dasbor admin
+      x-srs-ref: [FR-23, NFR-7, "Gambar 5.1 poin 11"]
+      parameters:
+        - name: date_from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: date_to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Log audit
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLog'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /admin/stats:
+    get:
+      tags: [Admin - Monitoring]
+      summary: Statistik penggunaan
+      x-srs-ref: ["Bab 2.2 Staf Kurator", "Gambar 5.1 poin 12"]
+      responses:
+        '200':
+          description: Statistik agregat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token dari /auth/login. Klaim `role` bernilai `user` atau `curator`.
+
+  parameters:
+    IdentificationId:
+      name: identificationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SpeciesId:
+      name: speciesId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: Permintaan tidak valid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Belum login atau token tidak valid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Bukan staf kurator BRIN yang sah
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Sumber daya tidak ditemukan
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Email sudah terdaftar
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Validasi gagal (mis. email kosong/tidak valid, kata sandi kosong)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Kesalahan server
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    MessageResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    Role:
+      type: string
+      enum: [user, curator]
+
+    RegisterRequest:
+      type: object
+      required: [full_name, email, password, confirm_password]
+      properties:
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        confirm_password:
+          type: string
+          format: password
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    AuthToken:
+      type: object
+      required: [access_token, token_type, role]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        role:
+          $ref: '#/components/schemas/Role'
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        full_name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/Role'
+        notification_enabled:
+          type: boolean
+
+    ActivitySummary:
+      type: object
+      properties:
+        total_identifications:
+          type: integer
+        uncertain_count:
+          type: integer
+        last_identification_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    SpeciesInput:
+      type: object
+      required: [scientific_name, local_name_bali, traditional_benefits, plant_parts_used, usage_method]
+      properties:
+        scientific_name:
+          type: string
+        local_name_bali:
+          type: string
+        traditional_benefits:
+          type: string
+        plant_parts_used:
+          type: array
+          items:
+            type: string
+        usage_method:
+          type: string
+
+    Species:
+      allOf:
+        - $ref: '#/components/schemas/SpeciesInput'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            is_verified:
+              type: boolean
+              description: Status terverifikasi kurator (FR-18)
+
+    IdentificationStatus:
+      type: string
+      description: '`identified` = confidence >= 0,25; `uncertain` = confidence < 0,25 (label "Tidak Meyakinkan").'
+      enum: [identified, uncertain]
+
+    DetectionStatus:
+      type: string
+      enum: [leaf_detected, fallback_full_image]
+
+    GradCam:
+      type: object
+      properties:
+        heatmap_url:
+          type: string
+          format: uri
+        overlay_url:
+          type: string
+          format: uri
+          description: Heatmap sebagai overlay pada citra daun asli (FR-16)
+        how_to_read:
+          type: string
+          description: Keterangan singkat cara membaca heatmap (FR-16)
+
+    IdentificationResult:
+      type: object
+      required: [id, status, status_label, detection_status, confidence, species_name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/IdentificationStatus'
+        status_label:
+          type: string
+          description: '"Meyakinkan" atau "Tidak Meyakinkan"'
+        detection_status:
+          $ref: '#/components/schemas/DetectionStatus'
+        detection_message:
+          type: string
+          nullable: true
+          description: Pesan status deteksi bila memakai fallback gambar penuh (FR-10)
+        species_name:
+          type: string
+          description: Nama spesies hasil klasifikasi (kandidat teratas bila `uncertain`)
+        species:
+          allOf:
+            - $ref: '#/components/schemas/Species'
+          description: Informasi etnobotani spesies hasil klasifikasi
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          example: 0.87
+        gradcam:
+          $ref: '#/components/schemas/GradCam'
+        saved_to_history:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    HistoryItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        photo_url:
+          type: string
+          format: uri
+          nullable: true
+        species_name:
+          type: string
+        confidence:
+          type: number
+          format: float
+        status:
+          $ref: '#/components/schemas/IdentificationStatus'
+        captured_at:
+          type: string
+          format: date-time
+
+    AdminIdentification:
+      allOf:
+        - $ref: '#/components/schemas/HistoryItem'
+        - type: object
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            flagged:
+              type: boolean
+            flag_reason:
+              type: string
+              nullable: true
+
+    Feedback:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        identification_id:
+          type: string
+          format: uuid
+        correct_species_id:
+          type: string
+          format: uuid
+        note:
+          type: string
+        curator_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        staff_name:
+          type: string
+        action:
+          type: string
+          example: species.update
+        resource:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    FcmUncertainNotification:
+      type: object
+      description: Payload notifikasi yang dikirim server melalui FCM saat hasil "Tidak Meyakinkan" (bukan request ke API ini).
+      properties:
+        notification:
+          type: object
+          properties:
+            title:
+              type: string
+              example: Hasil Tidak Meyakinkan
+            body:
+              type: string
+              example: Skor keyakinan rendah. Coba foto ulang bagian daun atau hubungi staf kurator.
+        data:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [uncertain_result]
+            identification_id:
+              type: string
+              format: uuid
+            confidence:
+              type: string
+              example: "0.18"
+
+    UsageStats:
+      type: object
+      properties:
+        total_users:
+          type: integer
+        total_identifications:
+          type: integer
+        uncertain_count:
+          type: integer
+        rejected_low_green_count:
+          type: integer
+        per_species:
+          type: array
+          items:
+            type: object
+            properties:
+              species_name:
+                type: string
+              count:
+                type: integer
