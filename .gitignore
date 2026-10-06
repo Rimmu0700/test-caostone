@@ -8,4 +8,4 @@ build/
 *.pt
 *.onnx
 .idea/
-.vscode/
+.vscode/.DS_Store
