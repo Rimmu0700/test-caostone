@@ -1,0 +1,28 @@
+name: Guard No Direct Push
+on:
+  push:
+    branches: [main, staging]
+
+jobs:
+  check-direct-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cek apakah commit ini berasal dari PR yang sudah di-merge
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.sha;
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: sha,
+            });
+            const merged = prs.some((pr) => pr.merged_at !== null);
+            if (!merged) {
+              core.setFailed(
+                `Push langsung terdeteksi di ${context.ref} oleh @${context.actor} ` +
+                `(commit ${sha}). Semua perubahan wajib lewat Pull Request + review.`
+              );
+            } else {
+              console.log("OK: commit ini berasal dari PR yang sah dan sudah di-merge.");
+            }
