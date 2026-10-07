@@ -1,0 +1,27 @@
+name: CI
+on:
+  pull_request:
+    branches: [staging, main]
+  push:
+    branches: [staging, main]
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt --break-system-packages
+
+      - name: Lint (muncul sebagai anotasi di PR)
+        run: ruff check --output-format=github backend/
+
+      - name: Ringkasan lint (muncul di tab Summary workflow run)
+        if: always()
+        run: |
+          echo "## Hasil Ruff Lint" >> "$GITHUB_STEP_SUMMARY"
+          ruff check backend/ --output-format=concise >> "$GITHUB_STEP_SUMMARY" || true
+
+      - run: pytest backend/

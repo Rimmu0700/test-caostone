@@ -41,4 +41,4 @@ Product Backlog, Sprint Backlog, In Progress, In Review, Done.
 | Backend 2 | Ni Wayan Putri Mahadewi |
 | DevOps, QA, Sprint Facilitator | Dewa Putu Sealtiel Armeza Diandra |
 
-Dosen Pembimbing: Ngakan Nyoman Kutha Krisnawijaya
+Dosen Pembimbing: Ngakan Nyoman Kutha Krisnawijayatest
