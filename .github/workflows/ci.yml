@@ -14,5 +14,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r backend/requirements.txt --break-system-packages
-      - run: ruff check backend/
+
+      - name: Lint (muncul sebagai anotasi di PR)
+        run: ruff check --output-format=github backend/
+
+      - name: Ringkasan lint (muncul di tab Summary workflow run)
+        if: always()
+        run: |
+          echo "## Hasil Ruff Lint" >> "$GITHUB_STEP_SUMMARY"
+          ruff check backend/ --output-format=concise >> "$GITHUB_STEP_SUMMARY" || true
+
       - run: pytest backend/

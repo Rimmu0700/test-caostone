@@ -12,12 +12,27 @@ jobs:
         with:
           script: |
             const sha = context.sha;
-            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              commit_sha: sha,
-            });
-            const merged = prs.some((pr) => pr.merged_at !== null);
+
+            async function isFromMergedPR() {
+              const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: sha,
+              });
+              return prs.some((pr) => pr.merged_at !== null);
+            }
+
+            // GitHub butuh beberapa detik untuk mengindeks hubungan
+            // "commit ini berasal dari PR mana" setelah merge baru terjadi.
+            // Coba 5x dengan jeda, baru vonis gagal kalau tetap tidak ketemu.
+            let merged = false;
+            for (let attempt = 1; attempt <= 5; attempt++) {
+              merged = await isFromMergedPR();
+              if (merged) break;
+              console.log(`Percobaan ${attempt}: belum terindeks, tunggu 5 detik...`);
+              await new Promise((r) => setTimeout(r, 5000));
+            }
+
             if (!merged) {
               core.setFailed(
                 `Push langsung terdeteksi di ${context.ref} oleh @${context.actor} ` +
