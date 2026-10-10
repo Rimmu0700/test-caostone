@@ -8,4 +8,8 @@ build/
 *.pt
 *.onnx
 .idea/
-.vscode/.DS_Store
+.vscode/
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.venv/
