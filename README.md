@@ -7,16 +7,25 @@ Jalur GovTech, pilar AI. Mitra: BRIN Kebun Raya Eka Karya Bali.
 
 | Folder | Isi | Penanggung jawab |
 |---|---|---|
-| backend | REST API, pipeline YOLO11, MobileNetV3-Small, Grad-CAM | Backend 1 dan Backend 2 |
-| mobile | Aplikasi Flutter untuk Android | Frontend 1 |
-| admin | Dasbor admin dan kurator | Frontend 2 |
-| docs | SRS, SAD, ERD, openapi.yaml, tautan Figma | Seluruh tim |
+| backend/api | REST API FastAPI per modul, migration Alembic, seeder | Backend 1 dan Backend 2 |
+| backend/inference | Inference Service: YOLO11, validasi piksel hijau, MobileNetV3-Small, Grad-CAM | Backend 1 dan Backend 2 |
+| frontend/mobile | Aplikasi Flutter untuk Android | Frontend 1 |
+| frontend/admin | Dasbor admin dan kurator, juga Flutter, dikerjakan belakangan | Frontend 2 |
+| infrastructure | Konfigurasi Nginx dan Certbot | DevOps |
+| docs | SRS, SAD, ERD, design system, arsip | Seluruh tim |
+
+Kontrak API ada di `openapi.yaml` pada root. Aturan arsitektur kode ada di `docs/ARSITEKTUR.md`.
 
 ## Menjalankan Secara Lokal
 
-1. Salin `.env.example` menjadi `.env` lalu isi nilainya.
-2. Jalankan `docker compose up --build`.
-3. API tersedia di `http://localhost:8000`.
+1. Salin `.env.example` menjadi `.env` lalu isi nilainya, termasuk `CURATOR_EMAIL` dan `CURATOR_PASSWORD` untuk akun kurator awal.
+2. Jalankan `docker compose up --build`. Layanan `migrate` menjalankan migration dan seeding lebih dulu, baru layanan `api` start.
+3. API tersedia di `http://localhost:8000` dan pemeriksaan kesehatan di `http://localhost:8000/health`.
+4. Untuk menjalankan tes atau Alembic langsung dari `backend/api` tanpa Docker, isi `DB_HOST=localhost` pada `.env`. Berkas `.env` di root otomatis dibaca.
+
+## Basis Data
+
+Skema mengikuti ERD 3NF pada `docs/ERD USADA.png` (15 tabel). Migration resmi ada di `backend/api/alembic/versions`, seeder di `backend/api/src/database/seeders`. Seeder aman dijalankan berulang dan tidak menimpa data yang sudah diubah kurator.
 
 ## Aturan Git
 
@@ -41,4 +50,4 @@ Product Backlog, Sprint Backlog, In Progress, In Review, Done.
 | Backend 2 | Ni Wayan Putri Mahadewi |
 | DevOps, QA, Sprint Facilitator | Dewa Putu Sealtiel Armeza Diandra |
 
-Dosen Pembimbing: Ngakan Nyoman Kutha Krisnawijayatest
+Dosen Pembimbing: Ngakan Nyoman Kutha Krisnawijaya

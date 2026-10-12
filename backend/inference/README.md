@@ -1,0 +1,1 @@
+Inference Service terisolasi: YOLO11, validasi piksel hijau, MobileNetV3-Small, dan Grad-CAM. Model dimuat sekali saat service start. File bobot disimpan di `models/` dan tidak di-commit. Tiap tahap pipeline ditaruh sebagai modul terpisah di `src/pipeline/`. Dockerfile dan requirements ditambahkan Backend saat tahap ini mulai dikerjakan.
