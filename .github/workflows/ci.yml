@@ -8,20 +8,70 @@ on:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: usada_bali
+          POSTGRES_USER: usada_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U usada_ci -d usada_bali"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: usada_bali
+      DB_USER: usada_ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r backend/requirements.txt --break-system-packages
+          cache: pip
+          cache-dependency-path: backend/api/requirements*.txt
+
+      - run: pip install -r requirements-dev.txt
 
       - name: Lint (muncul sebagai anotasi di PR)
-        run: ruff check --output-format=github backend/
+        run: ruff check --output-format=github .
 
       - name: Ringkasan lint (muncul di tab Summary workflow run)
         if: always()
         run: |
           echo "## Hasil Ruff Lint" >> "$GITHUB_STEP_SUMMARY"
-          ruff check backend/ --output-format=concise >> "$GITHUB_STEP_SUMMARY" || true
+          ruff check . --output-format=concise >> "$GITHUB_STEP_SUMMARY" || true
 
-      - run: pytest backend/
+      - name: Buat kredensial kurator acak khusus CI
+        run: |
+          echo "CURATOR_EMAIL=curator-ci@example.com" >> "$GITHUB_ENV"
+          echo "CURATOR_PASSWORD=$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - name: Migration dan seeding
+        run: |
+          alembic upgrade head
+          python -m src.database.seeders.run
+
+      - run: pytest
+
+  flutter-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      - run: flutter test
